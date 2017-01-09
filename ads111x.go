@@ -3,6 +3,8 @@ package ads111x
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
+	"fmt"
 
 	"golang.org/x/exp/io/i2c"
 )
@@ -14,10 +16,10 @@ const Resolution = 1 << 16
 type I2CAddress uint8
 
 const (
-	I2CA_48 = 0x48
-	I2CA_49 = 0x49
-	I2CA_4A = 0x4A
-	I2CA_4B = 0x4B
+	Addr48 I2CAddress = 0x48
+	Addr49            = 0x49
+	Addr4A            = 0x4A
+	Addr4B            = 0x4B
 )
 
 const (
@@ -39,17 +41,17 @@ const (
 )
 
 const (
-	// S_Busy means a conversion is currently being performed.
-	S_Busy = iota << Status_LSB
-	// S_Idle means a conversion is not currently being performed.
-	S_Idle
+	// Busy means a conversion is currently being performed.
+	Busy = iota << Status_LSB
+	// Idle means a conversion is not currently being performed.
+	Idle
 )
 
 type AIN uint16
 
 const (
 	AIN_LSB  uint8  = 12
-	AIN_Mask uint16 = ^uint16(7 << AIN_LSB)
+	AIN_Mask uint16 = uint16(7 << AIN_LSB)
 )
 
 const (
@@ -75,7 +77,7 @@ type FS uint16
 
 const (
 	FS_LSB  uint8  = 9
-	FS_Mask uint16 = ^uint16(7 << FS_LSB)
+	FS_Mask uint16 = uint16(7 << FS_LSB)
 )
 
 const (
@@ -123,21 +125,21 @@ type Mode uint16
 
 const (
 	Mode_LSB  uint8  = 8
-	Mode_Mask uint16 = ^uint16(1 << Mode_LSB)
+	Mode_Mask uint16 = uint16(1 << Mode_LSB)
 )
 
 const (
-	// M_Continuous is used to set continuous conversion mode.
-	M_Continuous Mode = iota << Mode_LSB
-	// M_Single is used to set Power-down single-shot mode (default).
-	M_Single
+	// Continuous is used to set continuous conversion mode.
+	Continuous Mode = iota << Mode_LSB
+	// Single is used to set Power-down single-shot mode (default).
+	Single
 )
 
 type DataRate uint16
 
 const (
 	DataRate_LSB  uint8  = 5
-	DataRate_Mask uint16 = ^uint16(7 << DataRate_LSB)
+	DataRate_Mask uint16 = uint16(7 << DataRate_LSB)
 )
 
 const (
@@ -163,61 +165,59 @@ type ComparatorMode uint16
 
 const (
 	ComparatorMode_LSB  uint8  = 4
-	ComparatorMode_Mask uint16 = ^uint16(1 << ComparatorMode_LSB)
+	ComparatorMode_Mask uint16 = uint16(1 << ComparatorMode_LSB)
 )
 
 const (
-	// CM_Traditional is used to set traditional comparator with histeresis (default).
-	CM_Traditional ComparatorMode = iota << ComparatorMode_LSB
-	// CM_Window is used to set window comparator mode.
-	CM_Window
+	// Traditional is used to set traditional comparator with histeresis (default).
+	Traditional ComparatorMode = iota << ComparatorMode_LSB
+	// Window is used to set window comparator mode.
+	Window
 )
 
 type ComparatorPolarity uint16
 
 const (
 	ComparatorPolarity_LSB  uint8  = 3
-	ComparatorPolarity_Mask uint16 = ^uint16(1 << ComparatorPolarity_LSB)
+	ComparatorPolarity_Mask uint16 = uint16(1 << ComparatorPolarity_LSB)
 )
 
 const (
-	// CP_ActiveLow is used to set polarity of ALERT/RDY pin to active low (default).
-	CP_ActiveLow ComparatorPolarity = iota << ComparatorPolarity_LSB
-	// CP_ActiveHigh is used to set polarity of ALERT/RDY pin to active high.
-	CP_ActiveHigh
+	// ActiveLow is used to set polarity of ALERT/RDY pin to active low (default).
+	ActiveLow ComparatorPolarity = iota << ComparatorPolarity_LSB
+	// ActiveHigh is used to set polarity of ALERT/RDY pin to active high.
+	ActiveHigh
 )
 
 type ComparatorLatching uint16
 
 const (
 	ComparatorLatching_LSB  uint8  = 2
-	ComparatorLatching_Mask uint16 = ^uint16(1 << ComparatorLatching_LSB)
+	ComparatorLatching_Mask uint16 = uint16(1 << ComparatorLatching_LSB)
 )
 
 const (
-	// CL_Off is used to set the comparator to non-latching (default).
-	CL_Off ComparatorLatching = iota << ComparatorLatching_LSB
-	//CL_On is used to set the comparator to latching.
-	CL_On
+	// Off is used to set the comparator to non-latching (default).
+	Off ComparatorLatching = iota << ComparatorLatching_LSB
+	//On is used to set the comparator to latching.
+	On
 )
 
 type ComparatorQueue uint16
 
 const (
 	ComparatorQueue_LSB  uint8  = 0
-	ComparatorQueue_Mask uint16 = ^uint16(1 << ComparatorQueue_LSB)
+	ComparatorQueue_Mask uint16 = uint16(1 << ComparatorQueue_LSB)
 )
 
 const (
 	// CQ_AfterOne is used to set number of successive conversions exceeding upper or lower
 	// thresholds before asserting ALERT/RDY pin.
-	CQ_AfterOne ComparatorQueue = iota << ComparatorQueue_LSB
-	CQ_AfterTwo
-	CQ_AfterFour
-	CQ_Disable
+	AfterOne ComparatorQueue = iota << ComparatorQueue_LSB
+	AfterTwo
+	AfterFour
+	Disable
 )
-
-//const unknownConfig = uint32(1 << 31)
 
 // ADC represents an ADS1113, ADS1114, or ADS1115 analog to digital converter.
 type ADC struct {
@@ -247,18 +247,54 @@ func Open(dev string, addr I2CAddress) (*ADC, error) {
 	return adc, nil
 }
 
+// Close closes the ADC connection.
+func (adc *ADC) Close() error {
+	return adc.i2c.Close()
+}
+
+// Mode returns the mode config setting.
+func (adc *ADC) Mode() (Mode, error) {
+	return Mode(adc.config & Mode_Mask), nil
+}
+
+// SetMode sets the mode of operation (continuous or single).
+func (adc *ADC) SetMode(m Mode) error {
+	cfg := adc.config & ^Mode_Mask
+	cfg |= uint16(m)
+	return adc.WriteConfig(cfg)
+}
+
+// FullScale returns the full scale config setting.
+func (adc *ADC) FullScale() (FS, error) {
+	return FS(adc.config & FS_Mask), nil
+}
+
+// SetFullScale sets the full scale range.
+func (adc *ADC) SetFullScale(fs FS) error {
+	cfg := adc.config & ^FS_Mask
+	cfg |= uint16(fs)
+	return adc.WriteConfig(cfg)
+}
+
 // Config returns the device config.
 func (adc *ADC) Config() (uint16, error) {
 	if adc.open {
 		return adc.config, nil
 	}
 
-	var buf [2]byte
-	if err := adc.ReadReg(ConfigReg, buf[:]); err != nil {
+	if err := adc.WriteReg(ConfigReg, []byte{}); err != nil {
 		return 0, err
 	}
 
-	config, err := toUint16(buf[:])
+	var buf [2]byte
+	if err := adc.Read(buf[:]); err != nil {
+		return 0, err
+	}
+
+	println("Config() read...")
+	println(hex.Dump(buf[:]))
+
+	config, err := leUint16(buf[:])
 	if err != nil {
 		return 0, err
 	}
@@ -270,15 +306,25 @@ func (adc *ADC) Config() (uint16, error) {
 
 // WriteConfig writes a new config to the device.
 func (adc *ADC) WriteConfig(cfg uint16) error {
-	return adc.WriteReg(ConfigReg, cfg)
+	println("writing config...")
+	println(cfg)
+	if err := adc.WriteReg(ConfigReg, cfg); err != nil {
+		return err
+	}
+	adc.config = cfg
+	return nil
 }
 
 // ReadVolts reads the voltage from the specified input.
 func (adc *ADC) ReadVolts(input AIN) (float64, error) {
-	cnt, err := adc.Read(input)
+	cnt, err := adc.ReadAIN(input)
 	if err != nil {
 		return 0, err
 	}
+
+	fmt.Printf("FS_Mask = %v\n", FS_Mask)
+	fmt.Printf("adc.config = %v\n", adc.config)
+	println(FS(adc.config & FS_Mask))
 
 	fsrange := FSRange(FS(adc.config & FS_Mask))
 	voltsPerCnt := fsrange / Resolution
@@ -286,8 +332,8 @@ func (adc *ADC) ReadVolts(input AIN) (float64, error) {
 	return float64(cnt) * voltsPerCnt, nil
 }
 
-// Read reads the value from the specified input.
-func (adc *ADC) Read(input AIN) (uint16, error) {
+// ReadAIN reads the value from the specified input.
+func (adc *ADC) ReadAIN(input AIN) (uint16, error) {
 	// If the input isn't currently selected, select it.
 	currentInput := AIN(adc.config & AIN_Mask)
 	if input != currentInput {
@@ -315,9 +361,22 @@ func (adc *ADC) Read(input AIN) (uint16, error) {
 	return val, nil
 }
 
+// Read reads from the device.
+func (adc *ADC) Read(buf []byte) error {
+	return adc.i2c.Read(buf)
+}
+
 // ReadReg reads a register.
 func (adc *ADC) ReadReg(reg byte, buf []byte) error {
-	return adc.i2c.ReadReg(reg, buf)
+	fmt.Printf("ReadReg(reg = %v)\n", reg)
+	err := adc.i2c.ReadReg(reg, buf)
+	println(hex.Dump(buf))
+	return err
+}
+
+// Write writes bytes to the device.
+func (adc *ADC) Write(buf []byte) error {
+	return adc.i2c.Write(buf)
 }
 
 // WriteReg writes a value to a register on the device.
@@ -340,5 +399,11 @@ func toBytes(data interface{}) ([]byte, error) {
 func toUint16(b []byte) (uint16, error) {
 	var v uint16
 	err := binary.Read(bytes.NewReader(b), binary.BigEndian, &v)
+	return v, err
+}
+
+func leUint16(b []byte) (uint16, error) {
+	var v uint16
+	err := binary.Read(bytes.NewReader(b), binary.LittleEndian, &v)
 	return v, err
 }
