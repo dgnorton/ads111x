@@ -3,8 +3,6 @@ package ads111x
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
-	"fmt"
 
 	"golang.org/x/exp/io/i2c"
 )
@@ -32,6 +30,9 @@ const (
 	// HiThreshReg is the address of the Hi_thresh register.
 	HiThreshReg
 )
+
+// DefaultConfig is the configuration the device boots with.
+const DefaultConfig = uint16(0x8583)
 
 type Status uint16
 
@@ -219,11 +220,17 @@ const (
 	Disable
 )
 
+type i2cdevice interface {
+	Close() error
+	Read([]byte) error
+	ReadReg(reg byte, buf []byte) error
+	Write(buf []byte) (err error)
+	WriteReg(reg byte, buf []byte) (err error)
+}
+
 // ADC represents an ADS1113, ADS1114, or ADS1115 analog to digital converter.
 type ADC struct {
-	i2c    *i2c.Device
-	open   bool
-	config uint16 // current device config
+	i2c i2cdevice
 }
 
 // Open returns a new ADC initialized and ready for use.
@@ -234,17 +241,9 @@ func Open(dev string, addr I2CAddress) (*ADC, error) {
 		return nil, err
 	}
 
-	adc := &ADC{
+	return &ADC{
 		i2c: d,
-	}
-
-	if _, err := adc.Config(); err != nil {
-		return nil, err
-	}
-
-	adc.open = true
-
-	return adc, nil
+	}, nil
 }
 
 // Close closes the ADC connection.
@@ -254,79 +253,76 @@ func (adc *ADC) Close() error {
 
 // Mode returns the mode config setting.
 func (adc *ADC) Mode() (Mode, error) {
-	return Mode(adc.config & Mode_Mask), nil
+	cfg, err := adc.Config()
+	if err != nil {
+		return Continuous, err
+	}
+	return Mode(cfg & Mode_Mask), nil
 }
 
 // SetMode sets the mode of operation (continuous or single).
 func (adc *ADC) SetMode(m Mode) error {
-	cfg := adc.config & ^Mode_Mask
+	cfg, err := adc.Config()
+	if err != nil {
+		return err
+	}
+	cfg &= ^Mode_Mask
 	cfg |= uint16(m)
 	return adc.WriteConfig(cfg)
 }
 
 // FullScale returns the full scale config setting.
 func (adc *ADC) FullScale() (FS, error) {
-	return FS(adc.config & FS_Mask), nil
+	cfg, err := adc.Config()
+	if err != nil {
+		return FS_0_256V, err
+	}
+	return FS(cfg & FS_Mask), nil
 }
 
 // SetFullScale sets the full scale range.
 func (adc *ADC) SetFullScale(fs FS) error {
-	cfg := adc.config & ^FS_Mask
+	cfg, err := adc.Config()
+	if err != nil {
+		return err
+	}
+	cfg &= ^FS_Mask
 	cfg |= uint16(fs)
 	return adc.WriteConfig(cfg)
 }
 
 // Config returns the device config.
 func (adc *ADC) Config() (uint16, error) {
-	if adc.open {
-		return adc.config, nil
-	}
-
-	if err := adc.WriteReg(ConfigReg, []byte{}); err != nil {
+	buf := make([]byte, 2)
+	if err := adc.ReadReg(ConfigReg, buf); err != nil {
 		return 0, err
 	}
 
-	var buf [2]byte
-	if err := adc.Read(buf[:]); err != nil {
+	var cfg uint16
+	if err := binary.Read(bytes.NewReader(buf), binary.BigEndian, &cfg); err != nil {
 		return 0, err
 	}
 
-	println("Config() read...")
-	println(hex.Dump(buf[:]))
-
-	config, err := leUint16(buf[:])
-	if err != nil {
-		return 0, err
-	}
-
-	adc.config = config
-
-	return config, nil
+	return cfg, nil
 }
 
 // WriteConfig writes a new config to the device.
 func (adc *ADC) WriteConfig(cfg uint16) error {
-	println("writing config...")
-	println(cfg)
-	if err := adc.WriteReg(ConfigReg, cfg); err != nil {
-		return err
-	}
-	adc.config = cfg
-	return nil
+	return adc.WriteReg(ConfigReg, cfg)
 }
 
 // ReadVolts reads the voltage from the specified input.
 func (adc *ADC) ReadVolts(input AIN) (float64, error) {
+	cfg, err := adc.Config()
+	if err != nil {
+		return 0.0, err
+	}
 	cnt, err := adc.ReadAIN(input)
 	if err != nil {
 		return 0, err
 	}
 
-	fmt.Printf("FS_Mask = %v\n", FS_Mask)
-	fmt.Printf("adc.config = %v\n", adc.config)
-	println(FS(adc.config & FS_Mask))
-
-	fsrange := FSRange(FS(adc.config & FS_Mask))
+	fsrange := FSRange(FS(cfg & FS_Mask))
 	voltsPerCnt := fsrange / Resolution
 
 	return float64(cnt) * voltsPerCnt, nil
@@ -334,11 +330,15 @@ func (adc *ADC) ReadVolts(input AIN) (float64, error) {
 
 // ReadAIN reads the value from the specified input.
 func (adc *ADC) ReadAIN(input AIN) (uint16, error) {
+	cfg, err := adc.Config()
+	if err != nil {
+		return 0, err
+	}
 	// If the input isn't currently selected, select it.
-	currentInput := AIN(adc.config & AIN_Mask)
+	currentInput := AIN(cfg & AIN_Mask)
 	if input != currentInput {
 		// Clear input select bits.
-		newConfig := adc.config & ^AIN_Mask
+		newConfig := cfg & ^AIN_Mask
 		// Set new input select bits.
 		newConfig |= uint16(input)
 		// Write new config.
@@ -348,17 +348,17 @@ func (adc *ADC) ReadAIN(input AIN) (uint16, error) {
 	}
 
 	// Read value from the conversion register.
-	var buf [2]byte
-	if err := adc.ReadReg(ConversionReg, buf[:]); err != nil {
+	buf := make([]byte, 2)
+	if err := adc.ReadReg(ConversionReg, buf); err != nil {
 		return 0, err
 	}
 
-	val, err := toUint16(buf[:])
-	if err != nil {
+	var n uint16
+	if err := binary.Read(bytes.NewReader(buf), binary.BigEndian, &n); err != nil {
 		return 0, err
 	}
 
-	return val, nil
+	return n, nil
 }
 
 // Read reads from the device.
@@ -368,10 +368,11 @@ func (adc *ADC) Read(buf []byte) error {
 
 // ReadReg reads a register.
 func (adc *ADC) ReadReg(reg byte, buf []byte) error {
-	fmt.Printf("ReadReg(reg = %v)\n", reg)
-	err := adc.i2c.ReadReg(reg, buf)
-	println(hex.Dump(buf))
-	return err
+	if err := adc.i2c.ReadReg(reg, buf); err != nil {
+		return err
+	}
+	//fmt.Printf("ReadReg(0x%x) = {0x%x, 0x%x}\n", reg, buf[0], buf[1])
+	return nil
 }
 
 // Write writes bytes to the device.
@@ -380,30 +381,19 @@ func (adc *ADC) Write(buf []byte) error {
 }
 
 // WriteReg writes a value to a register on the device.
-func (adc *ADC) WriteReg(reg byte, data interface{}) error {
+func (adc *ADC) WriteReg(reg byte, data uint16) error {
 	b, err := toBytes(data)
 	if err != nil {
 		return err
 	}
+	//fmt.Printf("WriteReg(0x%x, {0x%x, 0x%x})\n", reg, b[0], b[1])
+	//println(hex.Dump(b))
 	return adc.i2c.WriteReg(reg, b)
 }
 
 // toBytes converts data to a []byte suitable to send to the device.
-func toBytes(data interface{}) ([]byte, error) {
+func toBytes(data uint16) ([]byte, error) {
 	buf := &bytes.Buffer{}
 	err := binary.Write(buf, binary.BigEndian, data)
 	return buf.Bytes(), err
-}
-
-// toUint16 converts []byte to a uint16.
-func toUint16(b []byte) (uint16, error) {
-	var v uint16
-	err := binary.Read(bytes.NewReader(b), binary.BigEndian, &v)
-	return v, err
-}
-
-func leUint16(b []byte) (uint16, error) {
-	var v uint16
-	err := binary.Read(bytes.NewReader(b), binary.LittleEndian, &v)
-	return v, err
 }
