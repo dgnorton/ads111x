@@ -74,51 +74,51 @@ const (
 	AIN_3_GND
 )
 
-type FS uint16
+type Scale uint16
 
 const (
-	FS_LSB  uint8  = 9
-	FS_Mask uint16 = uint16(7 << FS_LSB)
+	Scale_LSB  uint8  = 9
+	Scale_Mask uint16 = uint16(7 << Scale_LSB)
 )
 
 const (
-	// FS_6_144V is used to set full scale range to +/- 6.144V.
-	FS_6_144V FS = iota << FS_LSB
-	// FS_4_096V is used to set full scale range to +/- 4.096V.
-	FS_4_096V
-	// FS_2_048V is used to set full scale range to +/- 2.048V (default).
-	FS_2_048V
-	// FS_1_024V is used to set full scale range to +/- 1.024V.
-	FS_1_024V
-	// FS_0_512V is used to set full scale range to +/- 0.512V.
-	FS_0_512V
-	// FS_0_256V is used to set full scale range to +/- 0.256V.
-	FS_0_256V
+	// Scale_6_144V is used to set full scale range to +/- 6.144V.
+	Scale_6_144V Scale = iota << Scale_LSB
+	// Scale_4_096V is used to set full scale range to +/- 4.096V.
+	Scale_4_096V
+	// Scale_2_048V is used to set full scale range to +/- 2.048V (default).
+	Scale_2_048V
+	// Scale_1_024V is used to set full scale range to +/- 1.024V.
+	Scale_1_024V
+	// Scale_0_512V is used to set full scale range to +/- 0.512V.
+	Scale_0_512V
+	// Scale_0_256V is used to set full scale range to +/- 0.256V.
+	Scale_0_256V
 )
 
-// FSMinMax returns the min and max voltages for the given full scale value.
-func FSMinMax(fs FS) (min, max float64) {
+// ScaleMinMax returns the min and max voltages for the given full scale value.
+func ScaleMinMax(fs Scale) (min, max float64) {
 	switch fs {
-	case FS_6_144V:
+	case Scale_6_144V:
 		return -6.144, 6.144
-	case FS_4_096V:
+	case Scale_4_096V:
 		return -4.096, 4.096
-	case FS_2_048V:
+	case Scale_2_048V:
 		return -2.048, 2.048
-	case FS_1_024V:
+	case Scale_1_024V:
 		return -1.024, 1.024
-	case FS_0_512V:
+	case Scale_0_512V:
 		return -0.512, 0.512
-	case FS_0_256V:
+	case Scale_0_256V:
 		return -0.256, 0.256
 	default:
 		panic("invalid fs value")
 	}
 }
 
-// FSRange returns the difference between max and min for the full scale value.
-func FSRange(fs FS) float64 {
-	min, max := FSMinMax(fs)
+// ScaleRange returns the difference between max and min for the full scale value.
+func ScaleRange(fs Scale) float64 {
+	min, max := ScaleMinMax(fs)
 	return max - min
 }
 
@@ -271,23 +271,34 @@ func (adc *ADC) SetMode(m Mode) error {
 	return adc.WriteConfig(cfg)
 }
 
-// FullScale returns the full scale config setting.
-func (adc *ADC) FullScale() (FS, error) {
+// Scale returns the full scale config setting.
+func (adc *ADC) Scale() (Scale, error) {
 	cfg, err := adc.Config()
 	if err != nil {
-		return FS_0_256V, err
+		return Scale_0_256V, err
 	}
-	return FS(cfg & FS_Mask), nil
+	return Scale(cfg & Scale_Mask), nil
 }
 
-// SetFullScale sets the full scale range.
-func (adc *ADC) SetFullScale(fs FS) error {
+// SetScale sets the full scale range.
+func (adc *ADC) SetScale(fs Scale) error {
 	cfg, err := adc.Config()
 	if err != nil {
 		return err
 	}
-	cfg &= ^FS_Mask
+	cfg &= ^Scale_Mask
 	cfg |= uint16(fs)
+	return adc.WriteConfig(cfg)
+}
+
+// SetDataRate sets the number of samples per second.
+func (adc *ADC) SetDataRate(dr DataRate) error {
+	cfg, err := adc.Config()
+	if err != nil {
+		return err
+	}
+	cfg &= ^DataRate_Mask
+	cfg |= uint16(dr)
 	return adc.WriteConfig(cfg)
 }
 
@@ -322,7 +333,7 @@ func (adc *ADC) ReadVolts(input AIN) (float64, error) {
 		return 0, err
 	}
 
-	fsrange := FSRange(FS(cfg & FS_Mask))
+	fsrange := ScaleRange(Scale(cfg & Scale_Mask))
 	voltsPerCnt := fsrange / Resolution
 
 	return float64(cnt) * voltsPerCnt, nil

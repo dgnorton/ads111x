@@ -30,6 +30,28 @@ func Test_SetMode(t *testing.T) {
 	}
 }
 
+func Test_SetScale(t *testing.T) {
+	adc := newTestADC()
+	i2c := adc.i2c.(*mockI2C)
+	i2c.expReg = ConfigReg
+	copy(i2c.expDat, []byte{0x81, 0x83})
+
+	if err := adc.SetScale(Scale_6_144V); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func Test_SetDataRate(t *testing.T) {
+	adc := newTestADC()
+	i2c := adc.i2c.(*mockI2C)
+	i2c.expReg = ConfigReg
+	copy(i2c.expDat, []byte{0x85, 0xe3})
+
+	if err := adc.SetDataRate(DR_860SPS); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newTestADC() *ADC {
 	return &ADC{
 		i2c: &mockI2C{
