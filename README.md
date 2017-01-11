@@ -1,3 +1,4 @@
+[![GoDoc](https://godoc.org/github.com/dgnorton/ads111x?status.svg)](https://godoc.org/github.com/dgnorton/ads111x)
 # ads111x
 Go package for interfacing with ADS111x 16-bit analog to digital converters from Adafruit.
 
