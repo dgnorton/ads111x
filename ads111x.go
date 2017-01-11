@@ -3,8 +3,10 @@ package ads111x
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	"golang.org/x/exp/io/i2c"
+	"golang.org/x/exp/io/i2c/driver"
 )
 
 // Resolution is the resolution of the ADC.
@@ -38,7 +40,7 @@ type Status uint16
 
 const (
 	Status_LSB  uint8  = 15
-	Status_Mask uint16 = ^uint16(1 << Status_LSB)
+	Status_Mask uint16 = uint16(1 << Status_LSB)
 )
 
 const (
@@ -208,7 +210,7 @@ type ComparatorQueue uint16
 
 const (
 	ComparatorQueue_LSB  uint8  = 0
-	ComparatorQueue_Mask uint16 = uint16(1 << ComparatorQueue_LSB)
+	ComparatorQueue_Mask uint16 = uint16(3 << ComparatorQueue_LSB)
 )
 
 const (
@@ -217,7 +219,7 @@ const (
 	AfterOne ComparatorQueue = iota << ComparatorQueue_LSB
 	AfterTwo
 	AfterFour
-	Disable
+	Disable // (default)
 )
 
 type i2cdevice interface {
@@ -233,10 +235,15 @@ type ADC struct {
 	i2c i2cdevice
 }
 
+type i2cOpener func(o driver.Opener, addr int) (*i2c.Device, error)
+
+// i2cOpen is for test purposes.
+var i2cOpen i2cOpener = i2c.Open
+
 // Open returns a new ADC initialized and ready for use.
 // dev is the I2C bus device, e.g., /dev/i2c-1
 func Open(dev string, addr I2CAddress) (*ADC, error) {
-	d, err := i2c.Open(&i2c.Devfs{Dev: dev}, int(addr))
+	d, err := i2cOpen(&i2c.Devfs{Dev: dev}, int(addr))
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +256,16 @@ func Open(dev string, addr I2CAddress) (*ADC, error) {
 // Close closes the ADC connection.
 func (adc *ADC) Close() error {
 	return adc.i2c.Close()
+}
+
+// Status returns the current status. A Busy status indicates that it is
+// currently performing a conversion and Idle means it's not.
+func (adc *ADC) Status() (Status, error) {
+	cfg, err := adc.Config()
+	if err != nil {
+		return Busy, err
+	}
+	return Status(cfg & Status_Mask), nil
 }
 
 // Mode returns the mode config setting.
@@ -291,6 +308,15 @@ func (adc *ADC) SetScale(fs Scale) error {
 	return adc.WriteConfig(cfg)
 }
 
+// DataRate returns the data rate (samples/second).
+func (adc *ADC) DataRate() (DataRate, error) {
+	cfg, err := adc.Config()
+	if err != nil {
+		return DR_8SPS, err
+	}
+	return DataRate(cfg & DataRate_Mask), nil
+}
+
 // SetDataRate sets the number of samples per second.
 func (adc *ADC) SetDataRate(dr DataRate) error {
 	cfg, err := adc.Config()
@@ -302,19 +328,89 @@ func (adc *ADC) SetDataRate(dr DataRate) error {
 	return adc.WriteConfig(cfg)
 }
 
+// ComparatorMode returns the comparator mode.
+func (adc *ADC) ComparatorMode() (ComparatorMode, error) {
+	cfg, err := adc.Config()
+	if err != nil {
+		return Traditional, err
+	}
+	return ComparatorMode(cfg & ComparatorMode_Mask), nil
+}
+
+// SetComparatorMode sets the comparator mode to Traditional or Window.
+func (adc *ADC) SetComparatorMode(cm ComparatorMode) error {
+	cfg, err := adc.Config()
+	if err != nil {
+		return err
+	}
+	cfg &= ^ComparatorMode_Mask
+	cfg |= uint16(cm)
+	return adc.WriteConfig(cfg)
+}
+
+// ComparatorPolarity returns the comparator polarity.
+func (adc *ADC) ComparatorPolarity() (ComparatorPolarity, error) {
+	cfg, err := adc.Config()
+	if err != nil {
+		return ActiveLow, err
+	}
+	return ComparatorPolarity(cfg & ComparatorPolarity_Mask), nil
+}
+
+// SetComparatorPolarity sets the comparator polarity.
+func (adc *ADC) SetComparatorPolarity(cp ComparatorPolarity) error {
+	cfg, err := adc.Config()
+	if err != nil {
+		return err
+	}
+	cfg &= ^ComparatorPolarity_Mask
+	cfg |= uint16(cp)
+	return adc.WriteConfig(cfg)
+}
+
+// ComparatorLatching returns the comparator latching.
+func (adc *ADC) ComparatorLatching() (ComparatorLatching, error) {
+	cfg, err := adc.Config()
+	if err != nil {
+		return Off, err
+	}
+	return ComparatorLatching(cfg & ComparatorLatching_Mask), nil
+}
+
+// SetComparatorLatching sets the comparator latching.
+func (adc *ADC) SetComparatorLatching(cl ComparatorLatching) error {
+	cfg, err := adc.Config()
+	if err != nil {
+		return err
+	}
+	cfg &= ^ComparatorLatching_Mask
+	cfg |= uint16(cl)
+	return adc.WriteConfig(cfg)
+}
+
+// ComparatorQueue returns the comparator queuing mode.
+func (adc *ADC) ComparatorQueue() (ComparatorQueue, error) {
+	cfg, err := adc.Config()
+	if err != nil {
+		return Disable, err
+	}
+	return ComparatorQueue(cfg & ComparatorQueue_Mask), nil
+}
+
+// SetComparatorQueue sets the comparator queuing mode.
+func (adc *ADC) SetComparatorQueue(cq ComparatorQueue) error {
+	cfg, err := adc.Config()
+	if err != nil {
+		return err
+	}
+	cfg &= ^ComparatorQueue_Mask
+	cfg |= uint16(cq)
+	return adc.WriteConfig(cfg)
+}
+
 // Config returns the device config.
 func (adc *ADC) Config() (uint16, error) {
-	buf := make([]byte, 2)
-	if err := adc.ReadReg(ConfigReg, buf); err != nil {
-		return 0, err
-	}
-
-	var cfg uint16
-	if err := binary.Read(bytes.NewReader(buf), binary.BigEndian, &cfg); err != nil {
-		return 0, err
-	}
-
-	return cfg, nil
+	return adc.ReadRegUint16(ConfigReg)
 }
 
 // WriteConfig writes a new config to the device.
@@ -377,6 +473,21 @@ func (adc *ADC) Read(buf []byte) error {
 	return adc.i2c.Read(buf)
 }
 
+// ReadRegUint16 reads a register and returns the result as a uint16.
+func (adc *ADC) ReadRegUint16(reg byte) (uint16, error) {
+	buf := make([]byte, 2)
+	if err := adc.ReadReg(reg, buf); err != nil {
+		return 0, err
+	}
+
+	var n uint16
+	if err := binary.Read(bytes.NewReader(buf), binary.BigEndian, &n); err != nil {
+		return 0, err
+	}
+
+	return n, nil
+}
+
 // ReadReg reads a register.
 func (adc *ADC) ReadReg(reg byte, buf []byte) error {
 	if err := adc.i2c.ReadReg(reg, buf); err != nil {
@@ -392,19 +503,23 @@ func (adc *ADC) Write(buf []byte) error {
 }
 
 // WriteReg writes a value to a register on the device.
-func (adc *ADC) WriteReg(reg byte, data uint16) error {
-	b, err := toBytes(data)
-	if err != nil {
-		return err
+func (adc *ADC) WriteReg(reg byte, data interface{}) error {
+	var b []byte
+	var err error
+
+	switch data.(type) {
+	case uint16:
+		buf := &bytes.Buffer{}
+		if err = binary.Write(buf, binary.BigEndian, data); err != nil {
+			return err
+		}
+		b = buf.Bytes()
+	case []byte:
+		b = data.([]byte)
+	default:
+		return fmt.Errorf("WriteReg only accepts uint16 or []byte data")
 	}
 	//fmt.Printf("WriteReg(0x%x, {0x%x, 0x%x})\n", reg, b[0], b[1])
 	//println(hex.Dump(b))
 	return adc.i2c.WriteReg(reg, b)
-}
-
-// toBytes converts data to a []byte suitable to send to the device.
-func toBytes(data uint16) ([]byte, error) {
-	buf := &bytes.Buffer{}
-	err := binary.Write(buf, binary.BigEndian, data)
-	return buf.Bytes(), err
 }
